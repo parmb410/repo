@@ -19,13 +19,15 @@ class EMGDataset(Dataset):
 def get_act_dataloader(args):
     dataset = EMGDataset(args.data_dir)
 
-    # Default split: 70% train, 15% val, 15% test
     total_len = len(dataset)
     train_len = int(0.7 * total_len)
     valid_len = int(0.15 * total_len)
     test_len = total_len - train_len - valid_len
 
-    train_set, valid_set, test_set = random_split(dataset, [train_len, valid_len, test_len])
+    train_set, valid_set, test_set = torch.utils.data.random_split(
+        dataset, [train_len, valid_len, test_len],
+        generator=torch.Generator().manual_seed(args.seed)
+    )
 
     train_loader = DataLoader(train_set, batch_size=args.batch_size, shuffle=True)
     train_loader_noshuffle = DataLoader(train_set, batch_size=args.batch_size, shuffle=False)
