@@ -2,15 +2,10 @@
 # Licensed under the MIT License.
 
 import time
-import torch
 from alg.opt import *
 from alg import alg, modelopera
 from utils.util import set_random_seed, get_args, print_row, print_args, train_valid_target_eval_names, alg_loss_dict, print_environ
 from datautil.getdataloader_single import get_act_dataloader
-
-# Curriculum Learning imports
-from selection_strategies.utils import DifficultyMemory
-from selection_strategies.flipped_classroom import FlippedClassroomScheduler
 
 
 def main(args):
@@ -20,11 +15,12 @@ def main(args):
     print_environ()
     print(s)
     if args.latent_domain_num < 6:
-        args.batch_size = 32 * args.latent_domain_num
+        args.batch_size = 32*args.latent_domain_num
     else:
-        args.batch_size = 16 * args.latent_domain_num
+        args.batch_size = 16*args.latent_domain_num
 
-    train_loader, train_loader_noshuffle, valid_loader, target_loader, _, _, _ = get_act_dataloader(args)
+    train_loader, train_loader_noshuffle, valid_loader, target_loader, _, _, _ = get_act_dataloader(
+        args)
 
     best_valid_acc, target_acc = 0, 0
 
@@ -39,90 +35,60 @@ def main(args):
         print(f'\n========ROUND {round}========')
         print('====Feature update====')
         loss_list = ['class']
-        print_row(['epoch'] + [item + '_loss' for item in loss_list], colwidth=15)
+        print_row(['epoch']+[item+'_loss' for item in loss_list], colwidth=15)
 
         for step in range(args.local_epoch):
             for data in train_loader:
                 loss_result_dict = algorithm.update_a(data, opta)
-            print_row([step] + [loss_result_dict[item] for item in loss_list], colwidth=15)
+            print_row([step]+[loss_result_dict[item]
+                              for item in loss_list], colwidth=15)
 
         print('====Latent domain characterization====')
         loss_list = ['total', 'dis', 'ent']
-        print_row(['epoch'] + [item + '_loss' for item in loss_list], colwidth=15)
+        print_row(['epoch']+[item+'_loss' for item in loss_list], colwidth=15)
 
         for step in range(args.local_epoch):
             for data in train_loader:
                 loss_result_dict = algorithm.update_d(data, optd)
-            print_row([step] + [loss_result_dict[item] for item in loss_list], colwidth=15)
+            print_row([step]+[loss_result_dict[item]
+                              for item in loss_list], colwidth=15)
 
         algorithm.set_dlabel(train_loader)
 
-        print('====Domain-invariant feature learning with Curriculum Learning====')
-
-        # Set up curriculum learning scheduler
-        difficulty_memory = DifficultyMemory(dataset_size=len(train_loader.dataset), memory_size=5)
-        scheduler = FlippedClassroomScheduler(
-            difficulty_memory,
-            difficulty_mode='loss',
-            start_epoch=0,
-            end_epoch=args.max_epoch,
-            pace_type='linear',
-            min_percent=0.3,
-            max_percent=1.0
-        )
+        print('====Domain-invariant feature learning====')
 
         loss_list = alg_loss_dict(args)
         eval_dict = train_valid_target_eval_names(args)
         print_key = ['epoch']
-        print_key.extend([item + '_loss' for item in loss_list])
-        print_key.extend([item + '_acc' for item in eval_dict.keys()])
+        print_key.extend([item+'_loss' for item in loss_list])
+        print_key.extend([item+'_acc' for item in eval_dict.keys()])
         print_key.append('total_cost_time')
         print_row(print_key, colwidth=15)
 
         sss = time.time()
         for step in range(args.local_epoch):
-            for batch in train_loader:
-                # Expect data = (x, y, index) for curriculum learning
-                if len(batch) == 3:
-                    x, y, indices = batch
-                else:
-                    x, y = batch
-                    indices = torch.arange(x.size(0))
+            for data in train_loader:
+                step_vals = algorithm.update(data, opt)
 
-                x, y, indices = x.cuda(), y.cuda(), indices.cuda()
+            results = {
+                'epoch': step,
+            }
 
-                # Forward pass to compute individual sample loss
-                outputs = algorithm.model(x)
-                losses = algorithm.criterion(outputs, y, reduction='none')
-                difficulty_memory.update(indices.cpu(), losses.detach().cpu())
+            results['train_acc'] = modelopera.accuracy(
+                algorithm, train_loader_noshuffle, None)
 
-                # Select samples based on scheduler
-                selected_indices = scheduler.select(indices.cpu(), losses.detach().cpu())
-                selected_mask = torch.tensor([i.item() in selected_indices for i in indices.cpu()],
-                                              device=indices.device)
-
-                # Filter selected samples
-                x_sel = x[selected_mask]
-                y_sel = y[selected_mask]
-
-                # Update model on selected data
-                step_vals = algorithm.update((x_sel, y_sel), opt)
-
-            results = {'epoch': step}
-            results['train_acc'] = modelopera.accuracy(algorithm, train_loader_noshuffle, None)
             acc = modelopera.accuracy(algorithm, valid_loader, None)
             results['valid_acc'] = acc
+
             acc = modelopera.accuracy(algorithm, target_loader, None)
             results['target_acc'] = acc
 
             for key in loss_list:
-                results[key + '_loss'] = step_vals[key]
-
+                results[key+'_loss'] = step_vals[key]
             if results['valid_acc'] > best_valid_acc:
                 best_valid_acc = results['valid_acc']
                 target_acc = results['target_acc']
-
-            results['total_cost_time'] = time.time() - sss
+            results['total_cost_time'] = time.time()-sss
             print_row([results[key] for key in print_key], colwidth=15)
 
     print(f'Target acc: {target_acc:.4f}')
