@@ -1,8 +1,15 @@
 
+# Fully integrated train.py with Automated K Estimation
+
+import time
 import torch
 import numpy as np
 from sklearn.cluster import KMeans
 from sklearn.metrics import silhouette_score
+from alg.opt import *
+from alg import alg, modelopera
+from utils.util import set_random_seed, get_args, print_row, print_args, train_valid_target_eval_names, alg_loss_dict, print_environ
+from datautil.getdataloader_single import get_act_dataloader
 
 def automated_k_estimation(features, k_min=2, k_max=10):
     best_k = k_min
@@ -20,34 +27,41 @@ def automated_k_estimation(features, k_min=2, k_max=10):
     print(f"[INFO] Optimal K determined as {best_k} (Silhouette Score: {best_score:.4f})")
     return best_k
 
-# Copyright (c) Microsoft Corporation.
-# Licensed under the MIT License.
-
-import time
-from alg.opt import *
-from alg import alg, modelopera
-from utils.util import set_random_seed, get_args, print_row, print_args, train_valid_target_eval_names, alg_loss_dict, print_environ
-from datautil.getdataloader_single import get_act_dataloader
-
-
 def main(args):
     s = print_args(args, [])
     set_random_seed(args.seed)
 
     print_environ()
     print(s)
-    if args.latent_domain_num < 6:
-        args.batch_size = 32*args.latent_domain_num
-    else:
-        args.batch_size = 16*args.latent_domain_num
 
-    train_loader, train_loader_noshuffle, valid_loader, target_loader, _, _, _ = get_act_dataloader(
-        args)
-
-    best_valid_acc, target_acc = 0, 0
+    train_loader, train_loader_noshuffle, valid_loader, target_loader, _, _, _ = get_act_dataloader(args)
 
     algorithm_class = alg.get_algorithm_class(args.algorithm)
     algorithm = algorithm_class(args).cuda()
+    
+    # Automated K Estimation
+    algorithm.eval()
+    feature_list = []
+
+    with torch.no_grad():
+        for data, _ in train_loader:
+            inputs = data[0].cuda() if isinstance(data, list) else data.cuda()
+            features = algorithm.featurizer(inputs)  # Adjust this line if featurizer method differs
+            feature_list.append(features.cpu().numpy())
+
+    all_features = np.concatenate(feature_list, axis=0)
+    optimal_k = automated_k_estimation(all_features)
+    args.latent_domain_num = optimal_k
+    print(f"Using automated latent_domain_num (K): {args.latent_domain_num}")
+
+    # Batch size adjustment based on latent_domain_num
+    if args.latent_domain_num < 6:
+        args.batch_size = 32 * args.latent_domain_num
+    else:
+        args.batch_size = 16 * args.latent_domain_num
+
+    best_valid_acc, target_acc = 0, 0
+
     algorithm.train()
     optd = get_optimizer(algorithm, args, nettype='Diversify-adv')
     opt = get_optimizer(algorithm, args, nettype='Diversify-cls')
@@ -62,8 +76,7 @@ def main(args):
         for step in range(args.local_epoch):
             for data in train_loader:
                 loss_result_dict = algorithm.update_a(data, opta)
-            print_row([step]+[loss_result_dict[item]
-                              for item in loss_list], colwidth=15)
+            print_row([step]+[loss_result_dict[item] for item in loss_list], colwidth=15)
 
         print('====Latent domain characterization====')
         loss_list = ['total', 'dis', 'ent']
@@ -72,13 +85,11 @@ def main(args):
         for step in range(args.local_epoch):
             for data in train_loader:
                 loss_result_dict = algorithm.update_d(data, optd)
-            print_row([step]+[loss_result_dict[item]
-                              for item in loss_list], colwidth=15)
+            print_row([step]+[loss_result_dict[item] for item in loss_list], colwidth=15)
 
         algorithm.set_dlabel(train_loader)
 
         print('====Domain-invariant feature learning====')
-
         loss_list = alg_loss_dict(args)
         eval_dict = train_valid_target_eval_names(args)
         print_key = ['epoch']
@@ -92,21 +103,14 @@ def main(args):
             for data in train_loader:
                 step_vals = algorithm.update(data, opt)
 
-            results = {
-                'epoch': step,
-            }
-
-            results['train_acc'] = modelopera.accuracy(
-                algorithm, train_loader_noshuffle, None)
-
-            acc = modelopera.accuracy(algorithm, valid_loader, None)
-            results['valid_acc'] = acc
-
-            acc = modelopera.accuracy(algorithm, target_loader, None)
-            results['target_acc'] = acc
+            results = {'epoch': step}
+            results['train_acc'] = modelopera.accuracy(algorithm, train_loader_noshuffle, None)
+            results['valid_acc'] = modelopera.accuracy(algorithm, valid_loader, None)
+            results['target_acc'] = modelopera.accuracy(algorithm, target_loader, None)
 
             for key in loss_list:
                 results[key+'_loss'] = step_vals[key]
+
             if results['valid_acc'] > best_valid_acc:
                 best_valid_acc = results['valid_acc']
                 target_acc = results['target_acc']
@@ -115,24 +119,6 @@ def main(args):
 
     print(f'Target acc: {target_acc:.4f}')
 
-
 if __name__ == '__main__':
     args = get_args()
     main(args)
-
-
-# Automated K estimation integration logic
-encoder.eval()
-feature_list = []
-
-with torch.no_grad():
-    for data, labels in train_loader:
-        data = data.cuda()
-        features = encoder(data)
-        feature_list.append(features.cpu().numpy())
-
-all_features = np.concatenate(feature_list, axis=0)
-
-optimal_k = automated_k_estimation(all_features)
-args.K = optimal_k
-print(f"Using automated K estimation: K = {args.K}")
