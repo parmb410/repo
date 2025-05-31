@@ -10,9 +10,6 @@ import os
 import argparse
 import torchvision
 import PIL
-from sklearn.cluster import KMeans
-from sklearn.metrics import silhouette_score
-import numpy as np
 
 
 def set_random_seed(seed=0):
