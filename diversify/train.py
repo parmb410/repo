@@ -4,13 +4,19 @@
 import time
 from alg.opt import *
 from alg import alg, modelopera
-from utils.util import set_random_seed, get_args, print_row, print_args, train_valid_target_eval_names, alg_loss_dict, print_environ
+from utils.util import set_random_seed, get_args, print_args, train_valid_target_eval_names, alg_loss_dict, print_environ
 from datautil.getdataloader_single import get_act_dataloader
 
 from diversify.auto_k_estimation import AutomatedKDataset
 import numpy as np
 import torch
 
+def print_row(values, colwidth=15):
+    row = ""
+    for val in values:
+        row += f"{val:<{colwidth}}"
+    print(row)
+    
 def main(args):
     s = print_args(args, [])
     set_random_seed(args.seed)
