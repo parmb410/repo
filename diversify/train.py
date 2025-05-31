@@ -38,15 +38,18 @@ def main(args):
 
     algorithm_class = alg.get_algorithm_class(args.algorithm)
     algorithm = algorithm_class(args).cuda()
+
+
+
     
     # Automated K Estimation
     algorithm.eval()
     feature_list = []
 
     with torch.no_grad():
-        for data, _ in train_loader:
-            inputs = data[0].cuda() if isinstance(data, list) else data.cuda()
-            features = algorithm.featurizer(inputs)  # Adjust this line if featurizer method differs
+        for batch in train_loader:
+            data = batch[0].cuda() if isinstance(batch, (list, tuple)) else batch.cuda()
+            features = algorithm.featurizer(data)  # Or your actual encoder logic
             feature_list.append(features.cpu().numpy())
 
     all_features = np.concatenate(feature_list, axis=0)
