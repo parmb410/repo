@@ -123,7 +123,7 @@ def get_args():
     parser.add_argument('--layer', type=str, default="bn",
                         choices=["ori", "bn"])
     parser.add_argument('--lam', type=float, default=0.0)
-    parser.add_argument('--latent_domain_num', type=int, default=3)
+    #parser.add_argument('--latent_domain_num', type=int, default=3)
     parser.add_argument('--local_epoch', type=int,
                         default=1, help='local iterations')
     parser.add_argument('--lr', type=float, default=1e-2, help="learning rate")
@@ -141,7 +141,7 @@ def get_args():
     parser.add_argument('--test_envs', type=int, nargs='+', default=[0])
     parser.add_argument('--output', type=str, default="train_output")
     parser.add_argument('--weight_decay', type=float, default=5e-4)
-	parser.add_argument('--K', type=int, default=None,help='Number of latent sub-domains; set automatically if None')
+    parser.add_argument('--K', type=int, default=None)
     args = parser.parse_args()
     args.steps_per_epoch = 10000000000
     args.data_dir = args.data_file+args.data_dir
