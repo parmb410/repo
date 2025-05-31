@@ -8,128 +8,129 @@ from utils.util import set_random_seed, get_args, print_row, print_args, train_v
 from datautil.getdataloader_single import get_act_dataloader
 
 from diversify.auto_k_estimation import AutomatedKDataset
+import numpy as np
+import torch
 
-def prepare_subdomains(model, data_loaders, args):
-    """
-    Called before each training run (once per “round” or per full dataset pass).
-    We’ll collect feature vectors per environment, run automated k‐estimation,
-    and then use those new domain labels to feed into DIVERSIFY’s loss / alignment steps.
-    """
-    src_envs = []
-    env_indices = []  # Keep track of how many samples per environment
-
-    # 1) Loop over your existing source‐env dataloaders
-    for env_loader in data_loaders:  
-        all_feats = []
-        for (x, y, idx) in env_loader:
-            # 1.a) Extract features/embeddings for this batch (just like DIVERSIFY does originally)
-            with torch.no_grad():
-                feats = model.extract_features(x.cuda())  # shape: (batch_size, feat_dim)
-            all_feats.append(feats.cpu().numpy())
-        env_feats = np.concatenate(all_feats, axis=0)   # shape: (N_env, feat_dim)
-        src_envs.append(env_feats)
-        env_indices.append(env_feats.shape[0])
-
-    # 2) Run automated K‐estimation across all concatenated features
-    auto_k = AutomatedKDataset(src_envs, k_min=args.k_min, k_max=args.k_max)
-    optimal_k, domain_labels_per_env = auto_k.run_estimation()
-    print(f">>> Automatically chosen k = {optimal_k} based on silhouette score")
-
-    # 3) domain_labels_per_env is now a list of NumPy arrays;
-    #    each array has length = number of samples in that environment,
-    #    and contains the assigned cluster label [0..(k−1)].
-    #
-    #    You can now feed these labels into DIVERSIFY’s “sub‐domain” logic,
-    #    exactly in place of whatever manual k & label‐assignment you used before.
-    #
-    #    For example, you might assign a new `dlabels` tensor to your dataset object,
-    #    or re‐build your “environment” dataloaders so that each sample is tagged
-    #    with the cluster ID instead of the original environment index.
-
-    return optimal_k, domain_labels_per_env
-    
 def main(args):
     s = print_args(args, [])
     set_random_seed(args.seed)
 
     print_environ()
     print(s)
-    if args.latent_domain_num < 6:
-        args.batch_size = 32*args.latent_domain_num
-    else:
-        args.batch_size = 16*args.latent_domain_num
 
-    train_loader, train_loader_noshuffle, valid_loader, target_loader, _, _, _ = get_act_dataloader(
-        args)
+    ##############################################
+    # 1) BUILD / LOAD YOUR SOURCE-ENVIRONMENTS ETC #
+    ##############################################
 
-    best_valid_acc, target_acc = 0, 0
+    # Example: load your source environment data loaders.
+    # You should have a list or dict of DataLoaders for each source environment.
+    # For illustration, let's assume:
+    # src_env_loaders = [loader_env0, loader_env1, ..., loader_envN]
+    # Replace this with your actual data-loading logic.
+    src_env_loaders = []
+    for env_id in args.source_envs:  # assume args.source_envs is a list of environment IDs
+        loader = get_act_dataloader(env=env_id, batch_size=args.batch_size, shuffle=True)
+        src_env_loaders.append(loader)
 
-    algorithm_class = alg.get_algorithm_class(args.algorithm)
-    algorithm = algorithm_class(args).cuda()
-    algorithm.train()
-    optd = get_optimizer(algorithm, args, nettype='Diversify-adv')
-    opt = get_optimizer(algorithm, args, nettype='Diversify-cls')
-    opta = get_optimizer(algorithm, args, nettype='Diversify-all')
+    # (Any other data loading or setup code goes here)
+    ##############################################
 
-    for round in range(args.max_epoch):
-        print(f'\n========ROUND {round}========')
-        print('====Feature update====')
-        loss_list = ['class']
-        print_row(['epoch']+[item+'_loss' for item in loss_list], colwidth=15)
+    # –––––––––––––––––––––––––––––––––––––––––––––
+    # 2) (NEW) RUN AUTOMATED K‐ESTIMATION ON EMBEDDINGS
+    #    We assume that you already have “source environment” DataLoaders
+    #    in a list called `src_env_loaders`. If your code loads them
+    #    differently, adapt the names accordingly.
 
-        for step in range(args.local_epoch):
-            for data in train_loader:
-                loss_result_dict = algorithm.update_a(data, opta)
-            print_row([step]+[loss_result_dict[item]
-                              for item in loss_list], colwidth=15)
+    src_envs = []
+    for env_loader in src_env_loaders:
+        # Collect all feature‐vectors (embeddings) for this environment
+        all_feats = []
+        for (x, y, idx) in env_loader:
+            # You may need to replace `modelopera.extract_features`
+            # with whatever your DIVERSIFY model uses to pull out a fixed‐dim embedding.
+            with torch.no_grad():
+                feats = modelopera.extract_features(x.cuda())
+            all_feats.append(feats.cpu().numpy())
+        if len(all_feats) > 0:
+            env_feats = np.concatenate(all_feats, axis=0)
+        else:
+            env_feats = np.zeros((0, args.feature_dim))  # fallback if empty
+        src_envs.append(env_feats)
 
-        print('====Latent domain characterization====')
-        loss_list = ['total', 'dis', 'ent']
-        print_row(['epoch']+[item+'_loss' for item in loss_list], colwidth=15)
+    # Now run automated‐K on the concatenated features
+    auto_k = AutomatedKDataset(src_envs, k_min=args.k_min, k_max=args.k_max)
+    optimal_k, labels_per_env = auto_k.run_estimation()
+    print(f">>> [AutomatedKDataset] Chosen k = {optimal_k} (silhouette‐based)")
 
-        for step in range(args.local_epoch):
-            for data in train_loader:
-                loss_result_dict = algorithm.update_d(data, optd)
-            print_row([step]+[loss_result_dict[item]
-                              for item in loss_list], colwidth=15)
+    # labels_per_env is a list of numpy arrays, one per environment.
+    # Each element labels_per_env[i] is an array of length = #samples in src_envs[i],
+    # with integer cluster IDs in [0 .. optimal_k-1].
 
-        algorithm.set_dlabel(train_loader)
+    # Concatenate all label arrays to a single 1D array of length = total samples
+    all_labels_concat = np.concatenate(labels_per_env, axis=0)
+    # Convert to a long PyTorch tensor and send to GPU if available
+    all_labels_tensor = torch.from_numpy(all_labels_concat).long().cuda()
 
-        print('====Domain-invariant feature learning====')
+    # Now you need to overwrite however your code previously set `dlabels`.
+    # For example, if your original DIVERSIFY code did something like:
+    #     dataset.dlabels = torch.tensor(orig_environment_index).long().cuda()
+    # Replace that with:
+    #     dataset.dlabels = all_labels_tensor
+    #
+    # If your DataLoader iterates with (x, y, d), you must rebuild it so that
+    # "d" comes from all_labels_tensor. Insert that assignment here.
 
-        loss_list = alg_loss_dict(args)
-        eval_dict = train_valid_target_eval_names(args)
-        print_key = ['epoch']
-        print_key.extend([item+'_loss' for item in loss_list])
-        print_key.extend([item+'_acc' for item in eval_dict.keys()])
-        print_key.append('total_cost_time')
-        print_row(print_key, colwidth=15)
+    # ←── INSERT HERE: assign `all_labels_tensor` back into your per‐sample “domain labels” 
+    #     wherever your training loop expects a `d` or `dlabels` input.
 
-        sss = time.time()
-        for step in range(args.local_epoch):
-            for data in train_loader:
-                step_vals = algorithm.update(data, opt)
+    #  End of Automated K block
+    # –––––––––––––––––––––––––––––––––––––––––––––
 
+    ##############################################
+    # 3) PROCEED WITH THE REST OF DIVERSIFY TRAINING #
+    ##############################################
+
+    best_valid_acc = 0.0
+    target_acc = 0.0
+
+    # Example training loop (pseudocode). Replace with your actual loop.
+    for round in range(args.n_rounds):
+        # (Re)build any per-round structures, use all_labels_tensor as needed
+        train_loader, valid_loader, test_loader = get_act_dataloader(env=round, batch_size=args.batch_size)
+
+        model = modelopera.build_model(args)
+        optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+
+        for epoch in range(args.n_epochs):
+            model.train()
+            for (x, y, d) in train_loader:
+                x, y = x.cuda(), y.cuda()
+                # Here, replace d with the automated domain label if needed
+                # For example, d = all_labels_tensor[sample_index]
+                outputs = model(x)
+                loss = alg_loss_dict(outputs, y, d, args, model)  # pseudocode
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
+
+            # Validation step (pseudocode)
+            model.eval()
+            with torch.no_grad():
+                # compute validation metrics
+                valid_acc = 0.0  # replace with actual computation
+                target_acc_local = 0.0
+
+            if valid_acc > best_valid_acc:
+                best_valid_acc = valid_acc
+                target_acc = target_acc_local
+
+            # Print per-epoch stats
             results = {
-                'epoch': step,
+                'valid_acc': valid_acc,
+                'target_acc': target_acc_local,
+                # ... other metrics ...
             }
-
-            results['train_acc'] = modelopera.accuracy(
-                algorithm, train_loader_noshuffle, None)
-
-            acc = modelopera.accuracy(algorithm, valid_loader, None)
-            results['valid_acc'] = acc
-
-            acc = modelopera.accuracy(algorithm, target_loader, None)
-            results['target_acc'] = acc
-
-            for key in loss_list:
-                results[key+'_loss'] = step_vals[key]
-            if results['valid_acc'] > best_valid_acc:
-                best_valid_acc = results['valid_acc']
-                target_acc = results['target_acc']
-            results['total_cost_time'] = time.time()-sss
-            print_row([results[key] for key in print_key], colwidth=15)
+            print_row([results[key] for key in ['valid_acc', 'target_acc']], colwidth=15)
 
     print(f'Target acc: {target_acc:.4f}')
 
