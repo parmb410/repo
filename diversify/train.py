@@ -39,18 +39,6 @@ def main(args):
     algorithm_class = alg.get_algorithm_class(args.algorithm)
     algorithm = algorithm_class(args).cuda()
 
-
-
-    # ---- WARM-UP PRE-TRAINING ----
-    print("\\n==== Warm-up Pre-Training (1-2 epochs) ====")
-    algorithm.train()
-    warmup_epochs = 2
-    for epoch in range(warmup_epochs):
-        print(f"Warm-up Epoch {epoch + 1}/{warmup_epochs}")
-        for step in range(args.local_epoch):
-            for data in train_loader:
-                _ = algorithm.update_a(data, opta)
-    print("Warm-up Pre-Training done.")
     # Automated K Estimation
     algorithm.eval()
     feature_list = []
